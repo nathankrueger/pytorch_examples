@@ -23,3 +23,35 @@ y_vals = np.zeros(y_vals.shape[0])
 sns.lineplot(x=x_vals, y=y_vals, label='f(x) = 0')
 
 plt.show()
+
+# example use of autograd
+x = torch.tensor([-5.0], requires_grad=True)
+y = f(x)
+y.backward()
+print(f"Gradient of f'(-5) = {x.grad.numpy()[0]}")
+
+# create a tensor that is tracked by autograd
+x = torch.tensor([-5.0], requires_grad=True)
+x_cur = x.clone()
+x_prev = x_cur * 100
+epsilon = 1e-5
+learn_rate = 1e-1
+
+# keep moving the position in the opposite direction of the derivative
+# (gradient) until we are hovering around a local / global minimum
+while torch.linalg.norm(x_cur - x_prev) > epsilon:
+    x_prev = x_cur.clone()
+
+    # do some math operations on 'x' which requires_grad so it is tracked by autograd
+    y = f(x)
+
+    # tell autograd to compute the gradient
+    y.backward()
+    x.data -= learn_rate * x.grad
+
+    # zero out the gradient for the subsequent iteration, this isn't done automatically by torch
+    x.grad.zero_()
+    x_cur = x.data
+
+# confirm the computed minimum is close to f'(x) = 0 ---> x = 2
+print(x_cur.detach().numpy()[0])
