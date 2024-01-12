@@ -2,6 +2,7 @@
 import torch
 import seaborn as sns
 import matplotlib.pyplot as plt
+from matplotlib import cm
 import numpy as np
 
 def f(x, y):
@@ -27,13 +28,19 @@ for epoch in range(100):
 
 print(f'x: {x.detach().numpy()[0]} y:{x.detach().numpy()[1]}')
 
-sns.set_style('whitegrid')
 x_vals = np.linspace(-10,10,500)
 y_vals = np.linspace(-10,10,500)
 xplot, yplot = np.meshgrid(x_vals, y_vals)
 zplot = f_np(xplot, yplot)
 axes = plt.axes(projection='3d')
-axes.plot_surface(xplot, yplot, zplot)
-axes.scatter3D([3.14],[4.14],f_np(np.asarray([3.14]), np.asarray([4.14])))
+
+axes.plot_surface(xplot, yplot, zplot, alpha=0.5)
+axes.scatter3D(
+    [3.14],
+    [4.14],
+    f_np(np.asarray([3.14]), np.asarray([4.14])),
+    c='red',
+    s=100
+)
 
 plt.show()
