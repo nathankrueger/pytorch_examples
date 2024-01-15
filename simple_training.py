@@ -113,7 +113,7 @@ def visualize2DSoftmax(X, y, model, title=None):
 
     plt.show()
 
-def simple_logreg_model():
+def simple_logreg_model(hidden_dim=30):
     X, y = make_moons(n_samples=200, noise=0.05)
 
     classification_dataset = TensorDataset(
@@ -123,16 +123,16 @@ def simple_logreg_model():
     training_loader = DataLoader(classification_dataset)
 
     model = torch.nn.Sequential(
-        torch.nn.Linear(2, 30),
+        torch.nn.Linear(2, hidden_dim),
         torch.nn.Tanh(),
-        torch.nn.Linear(30, 30),
+        torch.nn.Linear(hidden_dim, hidden_dim),
         torch.nn.Tanh(),
-        torch.nn.Linear(30, 2)
+        torch.nn.Linear(hidden_dim, 2)
     )
 
     train_simple_network(model, torch.nn.CrossEntropyLoss(), training_loader, epochs=250)
     visualize2DSoftmax(X, y, model)
 
 if __name__ == '__main__':
-    simple_logreg_model()
+    simple_logreg_model(hidden_dim=300)
     #simple_linear_model()
