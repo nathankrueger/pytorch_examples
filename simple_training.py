@@ -5,7 +5,12 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+import pandas as pd
+import time
 from sklearn.datasets import make_moons
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import f1_score
+from sklearn.model_selection import train_test_split
 
 def moveTo(obj, device):
     if isinstance(obj, list):
@@ -24,28 +29,143 @@ def moveTo(obj, device):
     else:
         return obj
 
-def train_simple_network(model, loss_func, training_loader, epochs, device='cpu'):
+def train_simple_network(
+        model: torch.nn.Module,
+        loss_func,
+        training_loader,
+        validation_loader=None,
+        score_funcs: dict=None, # dictionary of metric name to metric func
+        epochs: int=10,
+        device: str='cpu',
+        checkpoint_path: str=None
+    ) -> pd.DataFrame:
+    
+    to_track = ['epoch', 'total time', 'train loss']
+    if validation_loader is not None:
+        to_track.append('validation loss')
+    for eval_score in score_funcs:
+        to_track.append(f'train {eval_score}')
+        if validation_loader is not None:
+            to_track.append(f'validation {eval_score}')
+
+    total_train_time = 0
+    results = {}
+
+    for item in to_track:
+        results[item] = []
+        
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
     model.to(device)
 
     for epoch in tqdm(range(epochs), desc="Epoch"):
         model = model.train() # puts the model in training mode
-        running_loss = 0.0
 
-        for inputs, labels in tqdm(training_loader, desc="Batch", leave=False):
-            inputs = moveTo(inputs, device)
-            labels = moveTo(labels, device)
+        total_train_time += run_epoch(
+            model,
+            optimizer,
+            training_loader,
+            loss_func,
+            device,
+            results,
+            score_funcs,
+            prefix='train',
+            desc='Training'
+        )
 
+        results['total time'].append(total_train_time)
+        results['epoch'].append(epoch)
+
+        if validation_loader is not None:
+            model = model.eval()
+            
+            with torch.no_grad():
+                total_train_time += run_epoch(
+                    model,
+                    optimizer,
+                    validation_loader,
+                    loss_func,
+                    device,
+                    results,
+                    score_funcs,
+                    prefix='validation',
+                    desc='Validation'
+                )
+
+        if checkpoint_path is not None:
+            torch.save(
+                {
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'results': results
+                },
+                checkpoint_path
+            )
+
+    return pd.DataFrame.from_dict(results)
+
+def run_epoch(
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        data_loader,
+        loss_func,
+        device,
+        results,
+        score_funcs,
+        prefix: str='',
+        desc: str=None
+    ):
+
+    running_loss = []
+    y_true = []
+    y_pred = []
+
+    # start time for running through one epoch of the data
+    start = time.time()
+
+    for inputs, labels in tqdm(data_loader, desc=desc, leave=False):
+        # move the batch to the compute device
+        inputs = moveTo(inputs, device)
+        labels = moveTo(labels, device)
+
+        y_hat = model(inputs)
+
+        loss = loss_func(y_hat, labels)
+
+        if model.training:
+            loss.backward()
+            optimizer.step()
             optimizer.zero_grad()
 
-            y_hat = model(inputs)
-            loss = loss_func(y_hat, labels)
-            loss.backward()
+        running_loss.append(loss.item())
 
-            optimizer.step()
+        if len(score_funcs) > 0 and isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+            y_hat = y_hat.detach().cpu().numpy()
 
-            running_loss += loss.item()
+            y_true.extend(labels.tolist())
+            y_pred.extend(y_hat.tolist())
+
+    # end time for the epoch
+    end = time.time()
+
+    y_pred = np.asarray(y_pred)
+    is_classification = y_pred.shape[1] > 1
+
+    if len(y_pred.shape) == 2 and is_classification:
+        y_pred = np.argmax(y_pred, axis=1)
+
+    # calculate the average loss over all batches the current epoch is comprised of
+    results[f'{prefix} loss'].append(np.mean(running_loss))
+    for name, score_func in score_funcs.items():
+        try:
+            results[f'{prefix} {name}'].append(score_func(y_true, y_pred))
+        except:
+            results[f'{prefix} {name}'].append(float('NaN'))
+
+    # return the time spent on the epoch
+    return end - start
 
 class Simple1DRegressionDataset(Dataset):
     def __init__(self, X, y):
@@ -88,6 +208,7 @@ def simple_linear_model():
 
 def visualize2DSoftmax(X, y, model, title=None):
     x_min = np.min(X[:,0]) - 0.5
+
     x_max = np.max(X[:,0]) + 0.5
     y_min = np.min(X[:,1]) - 0.5
     y_max = np.max(X[:,1]) + 0.5
@@ -113,15 +234,24 @@ def visualize2DSoftmax(X, y, model, title=None):
 
     plt.show()
 
-def simple_logreg_model(hidden_dim=30):
-    X, y = make_moons(n_samples=200, noise=0.05)
+def simple_logreg_model(hidden_dim=30, batch_size=32):
+    # prepare the synthetic dataset
+    X, y = make_moons(n_samples=1000, noise=0.05)
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.25)
 
-    classification_dataset = TensorDataset(
-        torch.tensor(X, dtype=torch.float32),
-        torch.tensor(y, dtype=torch.long)
+    training_classification_dataset = TensorDataset(
+        torch.tensor(X_train, dtype=torch.float32),
+        torch.tensor(y_train, dtype=torch.long)
     )
-    training_loader = DataLoader(classification_dataset)
+    training_loader = DataLoader(training_classification_dataset, batch_size=batch_size, shuffle=True)
 
+    validation_classification_dataset = TensorDataset(
+        torch.tensor(X_val, dtype=torch.float32),
+        torch.tensor(y_val, dtype=torch.long)
+    )
+    validation_loader = DataLoader(validation_classification_dataset, batch_size=batch_size, shuffle=True)
+
+    # create the torch model
     model = torch.nn.Sequential(
         torch.nn.Linear(2, hidden_dim),
         torch.nn.Tanh(),
@@ -130,9 +260,24 @@ def simple_logreg_model(hidden_dim=30):
         torch.nn.Linear(hidden_dim, 2)
     )
 
-    train_simple_network(model, torch.nn.CrossEntropyLoss(), training_loader, epochs=250)
+    # train it!
+    results = train_simple_network(
+        model=model,
+        loss_func=torch.nn.CrossEntropyLoss(),
+        training_loader=training_loader,
+        validation_loader=validation_loader,
+        score_funcs={'F1': f1_score, 'Accuracy': accuracy_score},
+        epochs=250,
+        device='cpu',
+        checkpoint_path='serialized_model.pt'
+    )
+
+    sns.lineplot(x='epoch', y='train Accuracy', data=results, label='Train')
+    sns.lineplot(x='epoch', y='validation Accuracy', data=results, label='Validation')
+    plt.show()
+
     visualize2DSoftmax(X, y, model)
 
 if __name__ == '__main__':
-    simple_logreg_model(hidden_dim=300)
+    simple_logreg_model(hidden_dim=30, batch_size=1)
     #simple_linear_model()
